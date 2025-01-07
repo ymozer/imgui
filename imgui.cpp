@@ -25,7 +25,7 @@
 // please post in https://github.com/ocornut/imgui/discussions if you cannot find a solution in resources above.
 // Everything else should be asked in 'Issues'! We are building a database of cross-linked knowledge there.
 
-// Copyright (c) 2014-2024 Omar Cornut
+// Copyright (c) 2014-2025 Omar Cornut
 // Developed by Omar Cornut and every direct or indirect contributors to the GitHub.
 // See LICENSE.txt for copyright and licensing details (standard MIT License).
 // This library is free but needs your support to sustain development and maintenance.
@@ -1095,7 +1095,7 @@ CODE
 #else
 #include <windows.h>
 #endif
-#if defined(WINAPI_FAMILY) && (WINAPI_FAMILY == WINAPI_FAMILY_APP || WINAPI_FAMILY == WINAPI_FAMILY_GAMES)
+#if defined(WINAPI_FAMILY) && ((defined(WINAPI_FAMILY_APP) && WINAPI_FAMILY == WINAPI_FAMILY_APP) || (defined(WINAPI_FAMILY_GAMES) && WINAPI_FAMILY == WINAPI_FAMILY_GAMES))
 // The UWP and GDK Win32 API subsets don't support clipboard nor IME functions
 #define IMGUI_DISABLE_WIN32_DEFAULT_CLIPBOARD_FUNCTIONS
 #define IMGUI_DISABLE_WIN32_DEFAULT_IME_FUNCTIONS
@@ -1144,12 +1144,14 @@ CODE
 #pragma GCC diagnostic ignored "-Wpragmas"                          // warning: unknown option after '#pragma GCC diagnostic' kind
 #pragma GCC diagnostic ignored "-Wunused-function"                  // warning: 'xxxx' defined but not used
 #pragma GCC diagnostic ignored "-Wint-to-pointer-cast"              // warning: cast to pointer from integer of different size
-#pragma GCC diagnostic ignored "-Wformat"                           // warning: format '%p' expects argument of type 'void*', but argument 6 has type 'ImGuiWindow*'
+#pragma GCC diagnostic ignored "-Wfloat-equal"                      // warning: comparing floating-point with '==' or '!=' is unsafe
+#pragma GCC diagnostic ignored "-Wformat"                           // warning: format '%p' expects argument of type 'int'/'void*', but argument X has type 'unsigned int'/'ImGuiWindow*'
 #pragma GCC diagnostic ignored "-Wdouble-promotion"                 // warning: implicit conversion from 'float' to 'double' when passing argument to function
 #pragma GCC diagnostic ignored "-Wconversion"                       // warning: conversion to 'xxxx' from 'xxxx' may alter its value
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"                // warning: format not a string literal, format string not checked
 #pragma GCC diagnostic ignored "-Wstrict-overflow"                  // warning: assuming signed overflow does not occur when assuming that (X - c) > X is always false
 #pragma GCC diagnostic ignored "-Wclass-memaccess"                  // [__GNUC__ >= 8] warning: 'memset/memcpy' clearing/writing an object of type 'xxxx' with no trivial copy-assignment; use assignment or value-initialization instead
+#pragma GCC diagnostic ignored "-Wcast-qual"                        // warning: cast from type 'const xxxx *' to type 'xxxx *' casts away qualifiers
 #endif
 
 // Debug options
@@ -3882,7 +3884,8 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
     Time = 0.0f;
     FrameCount = 0;
     FrameCountEnded = FrameCountRendered = -1;
-    WithinFrameScope = WithinFrameScopeWithImplicitWindow = WithinEndChild = false;
+    WithinEndChildID = 0;
+    WithinFrameScope = WithinFrameScopeWithImplicitWindow = false;
     GcCompactAll = false;
     TestEngineHookItems = false;
     TestEngine = NULL;
@@ -3927,6 +3930,7 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
     ActiveIdPreviousFrameIsAlive = false;
     ActiveIdPreviousFrameHasBeenEditedBefore = false;
     ActiveIdPreviousFrameWindow = NULL;
+    memset(&ActiveIdValueOnActivation, 0, sizeof(ActiveIdValueOnActivation));
     LastActiveId = 0;
     LastActiveIdTimer = 0.0f;
 
@@ -4058,7 +4062,7 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
     StackSizesInBeginForCurrentWindow = NULL;
 
     DebugDrawIdConflictsCount = 0;
-    DebugLogFlags = ImGuiDebugLogFlags_EventError | ImGuiDebugLogFlags_OutputToTTY | ImGuiDebugLogFlags_EventFont;
+    DebugLogFlags = ImGuiDebugLogFlags_EventError | ImGuiDebugLogFlags_OutputToTTY;
     DebugLocateId = 0;
     DebugLogSkippedErrors = 0;
     DebugLogAutoDisableFlags = ImGuiDebugLogFlags_None;
@@ -4355,7 +4359,7 @@ void ImGui::SetActiveID(ImGuiID id, ImGuiWindow* window)
 
         // This could be written in a more general way (e.g associate a hook to ActiveId),
         // but since this is currently quite an exception we'll leave it as is.
-        // One common scenario leading to this is: pressing Key ->NavMoveRequestApplyResult() -> ClearActiveId()
+        // One common scenario leading to this is: pressing Key ->NavMoveRequestApplyResult() -> ClearActiveID()
         if (g.InputTextState.ID == g.ActiveId)
             InputTextDeactivateHook(g.ActiveId);
     }
@@ -6103,10 +6107,10 @@ void ImGui::EndChild()
     ImGuiContext& g = *GImGui;
     ImGuiWindow* child_window = g.CurrentWindow;
 
-    IM_ASSERT(g.WithinEndChild == false);
+    const ImGuiID backup_within_end_child_id = g.WithinEndChildID;
     IM_ASSERT(child_window->Flags & ImGuiWindowFlags_ChildWindow);   // Mismatched BeginChild()/EndChild() calls
 
-    g.WithinEndChild = true;
+    g.WithinEndChildID = child_window->ID;
     ImVec2 child_size = child_window->Size;
     End();
     if (child_window->BeginCount == 1)
@@ -6138,7 +6142,7 @@ void ImGui::EndChild()
         if (g.HoveredWindow == child_window)
             g.LastItemData.StatusFlags |= ImGuiItemStatusFlags_HoveredWindow;
     }
-    g.WithinEndChild = false;
+    g.WithinEndChildID = backup_within_end_child_id;
     g.LogLinePosY = -FLT_MAX; // To enforce a carriage return
 }
 
@@ -6727,9 +6731,10 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
     ImGuiStyle& style = g.Style;
     ImGuiWindowFlags flags = window->Flags;
 
-    // Ensure that ScrollBar doesn't read last frame's SkipItems
+    // Ensure that Scrollbar() doesn't read last frame's SkipItems
     IM_ASSERT(window->BeginCount == 0);
     window->SkipItems = false;
+    window->DC.NavLayerCurrent = ImGuiNavLayer_Menu;
 
     // Draw window + handle manual resize
     // As we highlight the title bar when want_focus is set, multiple reappearing windows will have their title bar highlighted on their reappearing frame.
@@ -6806,6 +6811,7 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
         if (handle_borders_and_resize_grips)
             RenderWindowOuterBorders(window);
     }
+    window->DC.NavLayerCurrent = ImGuiNavLayer_Main;
 }
 
 // Render title text, collapse button, close button
@@ -7390,9 +7396,12 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
         {
             IM_ASSERT(window->IDStack.Size == 1);
             window->IDStack.Size = 0; // As window->IDStack[0] == window->ID here, make sure TestEngine doesn't erroneously see window as parent of itself.
+            window->DC.NavLayerCurrent = ImGuiNavLayer_Menu;
             IMGUI_TEST_ENGINE_ITEM_ADD(window->ID, window->Rect(), NULL);
             IMGUI_TEST_ENGINE_ITEM_INFO(window->ID, window->Name, (g.HoveredWindow == window) ? ImGuiItemStatusFlags_HoveredRect : 0);
             window->IDStack.Size = 1;
+            window->DC.NavLayerCurrent = ImGuiNavLayer_Main;
+
         }
 #endif
 
@@ -7652,7 +7661,11 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
         // [Test Engine] Register title bar / tab with MoveId.
 #ifdef IMGUI_ENABLE_TEST_ENGINE
         if (!(window->Flags & ImGuiWindowFlags_NoTitleBar))
+        {
+            window->DC.NavLayerCurrent = ImGuiNavLayer_Menu;
             IMGUI_TEST_ENGINE_ITEM_ADD(g.LastItemData.ID, g.LastItemData.Rect, &g.LastItemData);
+            window->DC.NavLayerCurrent = ImGuiNavLayer_Main;
+        }
 #endif
     }
     else
@@ -7763,7 +7776,7 @@ void ImGui::End()
 
     // Error checking: verify that user doesn't directly call End() on a child window.
     if (window->Flags & ImGuiWindowFlags_ChildWindow)
-        IM_ASSERT_USER_ERROR(g.WithinEndChild, "Must call EndChild() and not End()!");
+        IM_ASSERT_USER_ERROR(g.WithinEndChildID == window->ID, "Must call EndChild() and not End()!");
 
     // Close anything that is open
     if (window->DC.CurrentColumns)
@@ -10475,8 +10488,16 @@ void ImGui::ErrorRecoveryTryToRecoverState(const ImGuiErrorRecoveryState* state_
         ImGuiWindow* window = g.CurrentWindow;
         if (window->Flags & ImGuiWindowFlags_ChildWindow)
         {
-            IM_ASSERT_USER_ERROR(0, "Missing EndChild()");
-            EndChild();
+            if (g.CurrentTable != NULL && g.CurrentTable->InnerWindow == g.CurrentWindow)
+            {
+                IM_ASSERT_USER_ERROR(0, "Missing EndTable()");
+                EndTable();
+            }
+            else
+            {
+                IM_ASSERT_USER_ERROR(0, "Missing EndChild()");
+                EndChild();
+            }
         }
         else
         {
@@ -11911,11 +11932,11 @@ void ImGui::EndPopup()
         NavMoveRequestTryWrapping(window, ImGuiNavMoveFlags_LoopY);
 
     // Child-popups don't need to be laid out
-    IM_ASSERT(g.WithinEndChild == false);
+    const ImGuiID backup_within_end_child_id = g.WithinEndChildID;
     if (window->Flags & ImGuiWindowFlags_ChildWindow)
-        g.WithinEndChild = true;
+        g.WithinEndChildID = window->ID;
     End();
-    g.WithinEndChild = false;
+    g.WithinEndChildID = backup_within_end_child_id;
 }
 
 // Helper to open a popup if mouse button is released over the item
@@ -13624,15 +13645,16 @@ static void ImGui::NavUpdateWindowing()
     // Keyboard: Press and Release ALT to toggle menu layer
     const ImGuiKey windowing_toggle_keys[] = { ImGuiKey_LeftAlt, ImGuiKey_RightAlt };
     bool windowing_toggle_layer_start = false;
-    for (ImGuiKey windowing_toggle_key : windowing_toggle_keys)
-        if (nav_keyboard_active && IsKeyPressed(windowing_toggle_key, 0, ImGuiKeyOwner_NoOwner))
-        {
-            windowing_toggle_layer_start = true;
-            g.NavWindowingToggleLayer = true;
-            g.NavWindowingToggleKey = windowing_toggle_key;
-            g.NavInputSource = ImGuiInputSource_Keyboard;
-            break;
-        }
+    if (g.NavWindow != NULL && !(g.NavWindow->Flags & ImGuiWindowFlags_NoNavInputs))
+        for (ImGuiKey windowing_toggle_key : windowing_toggle_keys)
+            if (nav_keyboard_active && IsKeyPressed(windowing_toggle_key, 0, ImGuiKeyOwner_NoOwner))
+            {
+                windowing_toggle_layer_start = true;
+                g.NavWindowingToggleLayer = true;
+                g.NavWindowingToggleKey = windowing_toggle_key;
+                g.NavInputSource = ImGuiInputSource_Keyboard;
+                break;
+            }
     if (g.NavWindowingToggleLayer && g.NavInputSource == ImGuiInputSource_Keyboard)
     {
         // We cancel toggling nav layer when any text has been typed (generally while holding Alt). (See #370)
@@ -14766,6 +14788,7 @@ void ImGui::LocalizeRegisterEntries(const ImGuiLocEntry* entries, int count)
 //-----------------------------------------------------------------------------
 // - GetMainViewport()
 // - SetWindowViewport() [Internal]
+// - ScaleWindowsInViewport() [Internal]
 // - UpdateViewportsNewFrame() [Internal]
 // (this section is more complete in the 'docking' branch)
 //-----------------------------------------------------------------------------
@@ -14779,6 +14802,24 @@ ImGuiViewport* ImGui::GetMainViewport()
 void ImGui::SetWindowViewport(ImGuiWindow* window, ImGuiViewportP* viewport)
 {
     window->Viewport = viewport;
+}
+
+static void ScaleWindow(ImGuiWindow* window, float scale)
+{
+    ImVec2 origin = window->Viewport->Pos;
+    window->Pos = ImFloor((window->Pos - origin) * scale + origin);
+    window->Size = ImTrunc(window->Size * scale);
+    window->SizeFull = ImTrunc(window->SizeFull * scale);
+    window->ContentSize = ImTrunc(window->ContentSize * scale);
+}
+
+// Scale all windows (position, size). Use when e.g. changing DPI. (This is a lossy operation!)
+void ImGui::ScaleWindowsInViewport(ImGuiViewportP* viewport, float scale)
+{
+    ImGuiContext& g = *GImGui;
+    for (ImGuiWindow* window : g.Windows)
+        if (window->Viewport == viewport)
+            ScaleWindow(window, scale);
 }
 
 // Update viewports and monitor infos
@@ -16481,7 +16522,7 @@ void ImGui::ShowDebugLogWindow(bool* p_open)
 void ImGui::DebugTextUnformattedWithLocateItem(const char* line_begin, const char* line_end)
 {
     TextUnformatted(line_begin, line_end);
-    if (!IsItemHovered())
+    if (!IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
         return;
     ImGuiContext& g = *GImGui;
     ImRect text_rect = g.LastItemData.Rect;
