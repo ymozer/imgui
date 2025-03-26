@@ -7,18 +7,18 @@
 #CXX = g++
 #CXX = clang++
 
-EXE = example_sdl3_sdlrenderer3
+EXE = example_sdl3_sdlgpu3
 IMGUI_DIR = ../..
 SOURCES = main.cpp
 SOURCES += $(IMGUI_DIR)/imgui.cpp $(IMGUI_DIR)/imgui_demo.cpp $(IMGUI_DIR)/imgui_draw.cpp $(IMGUI_DIR)/imgui_tables.cpp $(IMGUI_DIR)/imgui_widgets.cpp
-SOURCES += $(IMGUI_DIR)/backends/imgui_impl_sdl3.cpp $(IMGUI_DIR)/backends/imgui_impl_sdlrenderer3.cpp
+SOURCES += $(IMGUI_DIR)/backends/imgui_impl_sdl3.cpp $(IMGUI_DIR)/backends/imgui_impl_sdlgpu3.cpp
 OBJS = $(addsuffix .o, $(basename $(notdir $(SOURCES))))
 UNAME_S := $(shell uname -s)
-LINUX_GL_LIBS = -lGL
 
 CXXFLAGS = -std=c++11 -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
 CXXFLAGS += -g -Wall -Wformat
 LIBS =
+
 
 ##---------------------------------------------------------------------
 ## BUILD FLAGS PER PLATFORM
@@ -26,7 +26,7 @@ LIBS =
 
 ifeq ($(UNAME_S), Linux) #LINUX
 	ECHO_MESSAGE = "Linux"
-	LIBS += -ldl `pkg-config sdl3  --libs`
+	LIBS += -ldl `pkg-config sdl3 --libs`
 
 	CXXFLAGS += `pkg-config sdl3 --cflags`
 	CFLAGS = $(CXXFLAGS)
@@ -34,7 +34,7 @@ endif
 
 ifeq ($(UNAME_S), Darwin) #APPLE
 	ECHO_MESSAGE = "Mac OS X"
-	LIBS += -framework Cocoa -framework IOKit -framework CoreVideo `sdl3-config --libs`
+	LIBS += -framework Cocoa -framework IOKit -framework CoreVideo `pkg-config --libs sdl3`
 	LIBS += -L/usr/local/lib -L/opt/local/lib
 
 	CXXFLAGS += `pkg-config sdl3 --cflags`
